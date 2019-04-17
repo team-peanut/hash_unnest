@@ -7,6 +7,8 @@ Un-nests hashes, ie transforms:
 into
 
     { a.b: 1, c: 2 }
+    
+Keys in the output hash will be sorted in lexicographical order.
 
 ## Installation
 
@@ -17,5 +19,8 @@ into
 ```ruby
 require 'hash_unnest'
 Hash.include(HashUnnest)
-my_hash.unnest
+
+h = { a: { b: 1 }, c: 2 }
+h.unnest
+# => { a.b: 1, c: 2 }
 ```
