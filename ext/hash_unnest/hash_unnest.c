@@ -2,46 +2,54 @@
 #include <assert.h>
 #include "hash_unnest.h"
 
+#define RECORD_MAGIC 0xF00DF00D
+#define BUFFER_MAGIC 0xBA0BAB00
 
 // forward declarataions of closures
-static int hash_unnest_size_closure(VALUE key, VALUE val, VALUE in);
-static int hash_unnest_closure(VALUE key, VALUE val, VALUE in);
+static int hn_size_closure(VALUE key, VALUE val, VALUE in);
+static int hn_unnest_closure(VALUE key, VALUE val, VALUE in);
 
-static VALUE eHashUnnestModule = Qnil;
+static VALUE hn_hash_unnest_m = Qnil;
 
-static VALUE hn_buf_type = Qnil;
-static VALUE int_type = Qnil;
+static VALUE hn_buffer_type = Qnil;
+static VALUE hn_int_type = Qnil;
 
 // a (sortable) key-value entry
 typedef struct {
-  unsigned int magic;
+  #ifndef NDEBUG
+    unsigned int magic;
+  #endif
   VALUE key;
   VALUE value;
-} hn_record_t;
+} hn_entry_t;
 
 // a safe C array of key, value pairs
 typedef struct {
-  unsigned int magic;
+  #ifndef NDEBUG
+    unsigned int magic;
+  #endif
   int size;
   int cursor;
-  hn_record_t* buf;
-} hn_buf_t;
+  hn_entry_t* buf;
+} hn_buffer_t;
 
 /******************************************************************************/
 
-static void hn_buf_free(hn_buf_t* buf) {
-  LOG("*** hn_buf_free\n");
+static void hn_buffer_free(hn_buffer_t* buf) {
+  LOG("*** hn_buffer_free\n");
 
   free(buf->buf);
   buf->buf = NULL;
-  buf->magic = 0;
+  #ifndef NDEBUG
+    buf->magic = 0;
+  #endif
   free(buf);
 }
 
-static void hn_buf_mark(hn_buf_t* buf) {
-  LOG("*** hn_buf_mark\n");
+static void hn_buffer_mark(hn_buffer_t* buf) {
+  LOG("*** hn_buffer_mark\n");
 
-  assert(buf->magic == 0xF00DF00D);
+  assert(buf->magic == BUFFER_MAGIC);
 
   for (int k = 0; k < buf->cursor; ++k) {
     LOG("  rb_gc_mark '%s'\n", StringValueCStr(buf->buf[k].key));
@@ -50,25 +58,33 @@ static void hn_buf_mark(hn_buf_t* buf) {
   }
 }
 
-static VALUE hn_buf_alloc(int size) {
-  hn_buf_t* buf = NULL;
+static VALUE hn_buffer_alloc(int size) {
+  hn_buffer_t* buf = NULL;
 
-  buf = malloc(sizeof(hn_buf_t));
-  buf->magic = 0xF00DF00D;
-  buf->buf   = calloc(size+1, sizeof(hn_record_t));
+  buf = malloc(sizeof(hn_buffer_t));
+  #ifndef NDEBUG
+    buf->magic = BUFFER_MAGIC;
+  #endif
+  buf->buf   = calloc(size+1, sizeof(hn_entry_t));
   buf->size  = size;
   buf->cursor = 0;
 
   for (int k = 0; k < size; ++k) {
-    buf->buf[k].magic = 0xF00DF00D;
+    #ifndef NDEBUG
+      buf->buf[k].magic = RECORD_MAGIC;
+    #endif
     buf->buf[k].key = Qnil;
     buf->buf[k].value = Qnil;
   }
-  buf->buf[size].magic = 0;
+
+  // sentinel entry
+  #ifndef NDEBUG
+    buf->buf[size].magic = 0;
+  #endif
   buf->buf[size].key   = Qnil;
   buf->buf[size].value = Qnil;
 
-  return Data_Wrap_Struct(hn_buf_type, hn_buf_mark, hn_buf_free, buf);
+  return Data_Wrap_Struct(hn_buffer_type, hn_buffer_mark, hn_buffer_free, buf);
 }
 
 /******************************************************************************/
@@ -84,14 +100,14 @@ static VALUE hn_buf_alloc(int size) {
 // - When `val` is a hash, call ourselves recursively, appending the
 //   current key to the prefix.
 //
-static int hash_unnest_closure(VALUE key, VALUE val, VALUE in)
+static int hn_unnest_closure(VALUE key, VALUE val, VALUE in)
 {
   VALUE prefix = rb_ary_entry(in, 0);
 
 #ifdef DEBUG
   VALUE _str_key = rb_funcall(key,    rb_intern("inspect"), 0);
   VALUE _str_val = rb_funcall(val,    rb_intern("inspect"), 0);
-  LOG("*** hash_unnest_closure (%s,%s,'%s')\n", StringValueCStr(_str_key), StringValueCStr(_str_val), StringValueCStr(prefix));
+  LOG("*** hn_unnest_closure (%s,%s,'%s')\n", StringValueCStr(_str_key), StringValueCStr(_str_val), StringValueCStr(prefix));
 #endif
 
 
@@ -109,32 +125,32 @@ static int hash_unnest_closure(VALUE key, VALUE val, VALUE in)
         rb_ary_store(new_in, 0, new_prefix);
         rb_ary_store(new_in, 1, rb_ary_entry(in, 1));
 
-        rb_hash_foreach(val, hash_unnest_closure, new_in);
+        rb_hash_foreach(val, hn_unnest_closure, new_in);
         break;
       }
     default:
       {
         VALUE new_key = rb_str_dup(prefix);
-        hn_buf_t* output;
+        hn_buffer_t* c_buf;
 
         rb_str_append(new_key, key);
-        Data_Get_Struct(rb_ary_entry(in, 1), hn_buf_t, output);
+        Data_Get_Struct(rb_ary_entry(in, 1), hn_buffer_t, c_buf);
 
         #ifdef DEBUG
           {
             VALUE _str_key = rb_funcall(new_key, rb_intern("inspect"), 0);
             VALUE _str_val = rb_funcall(val,     rb_intern("inspect"), 0);
-            LOG("  adding item %d: %s, %s\n", output->cursor, StringValueCStr(_str_key), StringValueCStr(_str_val));
+            LOG("  adding item %d: %s, %s\n", c_buf->cursor, StringValueCStr(_str_key), StringValueCStr(_str_val));
           }
         #endif
 
-        assert(output->magic == 0xF00DF00D);
-        assert(output->cursor >= 0);
-        assert(output->cursor < output->size);
-        assert(output->buf[output->cursor].magic == 0xF00DF00D);
-        output->buf[output->cursor].key   = new_key;
-        output->buf[output->cursor].value = val;
-        ++(output->cursor);
+        assert(c_buf->magic == BUFFER_MAGIC);
+        assert(c_buf->cursor >= 0);
+        assert(c_buf->cursor < c_buf->size);
+        assert(c_buf->buf[c_buf->cursor].magic == RECORD_MAGIC);
+        c_buf->buf[c_buf->cursor].key   = new_key;
+        c_buf->buf[c_buf->cursor].value = val;
+        ++(c_buf->cursor);
       }
   }
   return ST_CONTINUE;
@@ -143,13 +159,13 @@ static int hash_unnest_closure(VALUE key, VALUE val, VALUE in)
 /******************************************************************************/
 
 // Recursively counts the number of leaves ("size") of a nested hash.
-static int hash_unnest_size_closure(VALUE key, VALUE val, VALUE in)
+static int hn_size_closure(VALUE key, VALUE val, VALUE in)
 {
   int* size = NULL;
   switch(TYPE(val)) {
     case T_HASH:
       {
-        rb_hash_foreach(val, hash_unnest_size_closure, in);
+        rb_hash_foreach(val, hn_size_closure, in);
         break;
       }
     default:
@@ -163,10 +179,10 @@ static int hash_unnest_size_closure(VALUE key, VALUE val, VALUE in)
 
 /******************************************************************************/
 
-/* Compares the `key`s in `hn_record_t`s, for sorting purposes. */
-int hn_record_compare(const void* a, const void* b) {
-  hn_record_t* record_a = (hn_record_t*) a;
-  hn_record_t* record_b = (hn_record_t*) b;
+/* Compares the `key`s in `hn_entry_t`s, for sorting purposes. */
+int hn_entry_compare(const void* a, const void* b) {
+  hn_entry_t* record_a = (hn_entry_t*) a;
+  hn_entry_t* record_b = (hn_entry_t*) b;
 
   LOG("compare '%s' to '%s'\n", StringValueCStr(record_a->key), StringValueCStr(record_b->key));
 
@@ -179,7 +195,7 @@ int hn_record_compare(const void* a, const void* b) {
 
 /******************************************************************************/
 
-static VALUE hash_unnest_unnest(VALUE self)
+static VALUE hn_unnest(VALUE self)
 {
   VALUE result, in, buf, prefix;
   hn_buffer_t* c_buf = NULL;
@@ -188,18 +204,16 @@ static VALUE hash_unnest_unnest(VALUE self)
 #ifdef DEBUG
   {
     VALUE _str_self   = rb_funcall(self,   rb_intern("to_s"), 0);
-    LOG("*** hash_unnest_unnest (%s)\n", StringValueCStr(_str_self));
+    LOG("*** hn_unnest (%s)\n", StringValueCStr(_str_self));
   }
 #endif
 
+  // count leaves in input
   rb_hash_foreach(
       self,
-      hash_unnest_size_closure,
-      Data_Wrap_Struct(int_type, NULL, NULL, &size)
+      hn_size_closure,
+      Data_Wrap_Struct(hn_int_type, NULL, NULL, &size)
   );
-
-  result = rb_hash_new();
-  /* result = rb_hash_new_with_size(size); */
 
 #ifdef DEBUG
   {
@@ -208,26 +222,32 @@ static VALUE hash_unnest_unnest(VALUE self)
   }
 #endif
 
+  // unnest `self` into `buf`
   prefix = rb_str_new("", 0);
-  buf = hn_buf_alloc(size);
+  buf = hn_buffer_alloc(size);
 
   in = rb_ary_new2(2);
   rb_ary_store(in, 0, prefix);
   rb_ary_store(in, 1, buf);
-    
-  rb_hash_foreach(self, hash_unnest_closure, in);
+  
+  rb_hash_foreach(self, hn_unnest_closure, in);
 
-  Data_Get_Struct(buf, hn_buf_t, c_buf);
+  // sort the C array of key, value pairs
+  Data_Get_Struct(buf, hn_buffer_t, c_buf);
   assert(c_buf != NULL);
   assert(c_buf->buf != NULL);
-  assert(c_buf->magic == 0xF00DF00D);
+  assert(c_buf->magic == BUFFER_MAGIC);
   assert(c_buf->cursor == size);
-  qsort((void*) c_buf->buf, c_buf->cursor, sizeof(hn_record_t), hn_record_compare);
+
+  qsort((void*) c_buf->buf, c_buf->cursor, sizeof(hn_entry_t), hn_entry_compare);
+
+  // copy the array into a new hash
+  result = rb_hash_new();
 
   for (int k = 0; k < c_buf->cursor; ++k) {
-    hn_record_t entry = c_buf->buf[k];
+    hn_entry_t entry = c_buf->buf[k];
 
-    assert(entry.magic == 0xF00DF00D);
+    assert(entry.magic == RECORD_MAGIC);
     assert(entry.key != Qnil);
     assert(entry.value != Qnil);
     rb_hash_aset(result, entry.key, entry.value);
@@ -246,12 +266,12 @@ void Init_hash_unnest(void) {
   assert(sizeof(VALUE) == sizeof(int*));
 
   /* assume we haven't yet defined hash_unnest */
-  eHashUnnestModule = rb_define_module("HashUnnest");
-  hn_buf_type = rb_define_class_under(eHashUnnestModule, "CHnBuf", rb_cObject);
-  int_type = rb_define_class_under(eHashUnnestModule, "CInt", rb_cObject);
+  hn_hash_unnest_m = rb_define_module("HashUnnest");
+  hn_buffer_type = rb_define_class_under(hn_hash_unnest_m, "CHnBuf", rb_cObject);
+  hn_int_type = rb_define_class_under(hn_hash_unnest_m, "CInt", rb_cObject);
 
-  assert(eHashUnnestModule != Qnil);
+  assert(hn_hash_unnest_m != Qnil);
 
-  rb_define_method(eHashUnnestModule, "unnest_c", hash_unnest_unnest, 0);
+  rb_define_method(hn_hash_unnest_m, "unnest_c", hn_unnest, 0);
   return;
 }
