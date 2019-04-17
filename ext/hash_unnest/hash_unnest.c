@@ -38,12 +38,12 @@ typedef struct {
 static void hn_buffer_free(hn_buffer_t* buf) {
   LOG("*** hn_buffer_free\n");
 
-  free(buf->buf);
+  xfree(buf->buf);
   buf->buf = NULL;
   #ifndef NDEBUG
     buf->magic = 0;
   #endif
-  free(buf);
+  xfree(buf);
 }
 
 static void hn_buffer_mark(hn_buffer_t* buf) {
@@ -61,11 +61,11 @@ static void hn_buffer_mark(hn_buffer_t* buf) {
 static VALUE hn_buffer_alloc(int size) {
   hn_buffer_t* buf = NULL;
 
-  buf = malloc(sizeof(hn_buffer_t));
+  buf = ALLOC(hn_buffer_t);
   #ifndef NDEBUG
     buf->magic = BUFFER_MAGIC;
   #endif
-  buf->buf   = calloc(size+1, sizeof(hn_entry_t));
+  buf->buf   = ALLOC_N(hn_entry_t, size+1);
   buf->size  = size;
   buf->cursor = 0;
 
