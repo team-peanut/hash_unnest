@@ -23,5 +23,5 @@ RSpec.describe do
     }
   }
   it { expect(large_hashes.sample.unnest.keys.length).to eq(2244) }
-  it { 10000.times { expect(large_hashes.sample.unnest.keys.length).to eq(2244) } }
+  it { 2000.times { expect(large_hashes.sample.unnest.keys.length).to eq(2244) } }
 end
