@@ -182,7 +182,7 @@ int hn_record_compare(const void* a, const void* b) {
 static VALUE hash_unnest_unnest(VALUE self)
 {
   VALUE result, in, buf, prefix;
-  hn_buf_t* c_buf = NULL;
+  hn_buffer_t* c_buf = NULL;
   int size = 0;
 
 #ifdef DEBUG
