@@ -1,7 +1,7 @@
 PATH
   remote: .
   specs:
-    hash_unnest (1.0.0)
+    hash_unnest (1.0.1)
 
 GEM
   remote: https://rubygems.org/
@@ -40,4 +40,4 @@ DEPENDENCIES
   rspec
 
 BUNDLED WITH
-   1.16.2
+   1.17.1
