@@ -1,7 +1,7 @@
 PATH
   remote: .
   specs:
-    hash_unnest (1.0.1)
+    hash_unnest (1.0.2)
 
 GEM
   remote: https://rubygems.org/

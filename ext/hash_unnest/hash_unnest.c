@@ -249,7 +249,6 @@ static VALUE hn_unnest(VALUE self)
 
     assert(entry.magic == RECORD_MAGIC);
     assert(entry.key != Qnil);
-    assert(entry.value != Qnil);
     rb_hash_aset(result, entry.key, entry.value);
   }
 
